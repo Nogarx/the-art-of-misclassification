@@ -15,18 +15,18 @@ def entropy(x, p, rho):
 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
 
-def classificability_estimator(x_data, y_data, distance_threshold=None, k_neighbors=None, return_probs=False, return_entropies=False, num_workers=4):
+def classificability_estimator(x_data, y_data, distance_threshold=None, k_neighbors=None, return_probs=False, return_entropies=False, metric='minkowski', num_workers=4):
 
     @ray.remote
-    def query_balltree(query_chunk, x, y):
+    def query_balltree(query_chunk, x, y, n_c):
         # Build a Ball Tree for efficient distance estimation.
-        worker_tree = BallTree(x)
+        worker_tree = BallTree(x, metric=metric)
         if k_neighbors is not None:
             indices = worker_tree.query(query_chunk, k=k_neighbors, return_distance=False)
         else:
             indices = worker_tree.query_radius(query_chunk, r=distance_threshold, return_distance=False)
         # Estimate probability around each point.
-        probs = np.zeros((query_chunk.shape[0], num_classes))
+        probs = np.zeros((query_chunk.shape[0], n_c))
         for it, idx in enumerate(indices):
             unique, counts = np.unique(y[idx], return_counts=True)
             probs[it, unique] = counts / np.sum(counts)
@@ -46,7 +46,7 @@ def classificability_estimator(x_data, y_data, distance_threshold=None, k_neighb
     share_y = ray.put(y_data)
     query_x_chunks = np.array_split(x_data, num_workers)
     #ray.init(ignore_reinit_error=True)
-    results = ray.get([query_balltree.remote(x_chunk, share_x, share_y) for x_chunk in query_x_chunks])
+    results = ray.get([query_balltree.remote(x_chunk, share_x, share_y, num_classes) for x_chunk in query_x_chunks])
     #ray.shutdown()
     probs = np.vstack(results)
     # Compute entropy assuming constant entropy around each data point.
@@ -61,12 +61,12 @@ def classificability_estimator(x_data, y_data, distance_threshold=None, k_neighb
 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
 
-def mean_min_max_dist_estimation(x_data, k_low=2, k_high=10, num_workers=4):
+def mean_min_max_dist_estimation(x_data, k_low=2, k_high=10, metric='minkowski', num_workers=4):
 
     @ray.remote
     def query_balltree(query_chunk, x, k):
         # Build a Ball Tree for efficient distance estimation.
-        worker_tree = BallTree(x)
+        worker_tree = BallTree(x, metric=metric)
         distances, _ = worker_tree.query(query_chunk, k=k, return_distance=True)
         return distances[:, 1:]
 
@@ -101,13 +101,13 @@ def mean_min_max_dist_estimation(x_data, k_low=2, k_high=10, num_workers=4):
 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
 
-def density_dist_space(x_data, points=25, d_low=0.001, d_high=0.05, num_workers=4):
+def density_dist_space(x_data, points=25, d_low=0.001, d_high=0.05, metric='minkowski', num_workers=4):
 
 
     @ray.remote
     def query_balltree(query_chunk, x, k):
         # Build a Ball Tree for efficient distance estimation.
-        worker_tree = BallTree(x)
+        worker_tree = BallTree(x, metric=metric)
         distances, _ = worker_tree.query(query_chunk, k=k, return_distance=True)
         return distances[:, 1:]
 
@@ -137,13 +137,13 @@ def density_dist_space(x_data, points=25, d_low=0.001, d_high=0.05, num_workers=
 
 #-----------------------------------------------------------------------------------------------------------------------------------------#
 
-def density_dist(x_data, d=0.01, min_k=None):
+def density_dist(x_data, d=0.01, min_k=None, metric='minkowski'):
     # Reshape if array is 1D for the Ball Tree.
     # The first dim corresponds to sample index.
     if len(x_data.shape) == 1:
         x_data = x_data.reshape(-1,1)
     # Build a Ball Tree for efficient distance estimation.
-    tree = BallTree(x_data)
+    tree = BallTree(x_data, metric=metric)
     # Estimate mean distance of round(d * len(x_data)) nearest neighbors to each point.
     k = max(round(d * x_data.shape[0]), min_k) if min_k is not None else round(d * x_data.shape[0])
     if k < 2:
